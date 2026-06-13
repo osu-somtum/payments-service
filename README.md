@@ -142,8 +142,8 @@ Key variables:
 |----------|----------|-------------|
 | `DB_HOST/USER/PASS/NAME` | ✅ | Same MySQL instance as bancho.py |
 | `BANCHO_INTERNAL_TOKEN` | ✅ | Shared secret — must match `PAYMENT_SERVICE_TOKEN` in bancho.py |
-| `BANCHO_INTERNAL_URL` | ✅ | URL of bancho.py's session subdomain, e.g. `https://session.yourdomain.com` |
-| `DOMAIN` | ✅ | Your server domain, e.g. `freedomdive.dev` |
+| `BANCHO_INTERNAL_URL` | ✅ | URL where the `/internal/grant_donator` endpoint is reachable. Somtum/session.py fork: `https://session.yourdomain.com`. Vanilla bancho.py: `https://api.yourdomain.com` |
+| `DOMAIN` | ✅ | Your server domain, e.g. `yourdomain.com` |
 | `STRIPE_SECRET_KEY` | ❌ | Enables Stripe checkout |
 | `STRIPE_WEBHOOK_SECRET` | ❌ | Required for webhook auto-approval |
 | `TRUEMONEY_ENABLED` | ❌ | Master toggle for TrueMoney (default false) |
