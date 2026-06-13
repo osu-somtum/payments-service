@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "payment-service"
+version = "1.0.0"
+description = "Somtum payment microservice"
+authors = ["Phapoom Saksri"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.111.0"
+uvicorn = {extras = ["standard"], version = "^0.29.0"}
+databases = {extras = ["mysql"], version = "^0.9.0"}
+sqlalchemy = ">=2.0"
+httpx = "^0.27.0"
+orjson = "^3.10.0"
+pillow = ">=11.0"
+python-multipart = "^0.0.9"
+python-dotenv = "^1.0.0"
+stripe = "^9.0.0"
+
+[tool.poetry.group.dev.dependencies]
+mypy = "^1.10.0"
+pytest = "^8.2.0"
+pytest-asyncio = "^0.23.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
