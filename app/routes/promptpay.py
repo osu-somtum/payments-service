@@ -52,7 +52,7 @@ async def donate_promptpay_submit(request: Request) -> ORJSONResponse:
         return ORJSONResponse({"status": "Unauthorized"}, status_code=status.HTTP_401_UNAUTHORIZED)
 
     try:
-        form = await request.form(max_part_size=settings.PROMPTPAY_SLIP_MAX_BYTES + 1024)
+        form = await request.form()
     except Exception:
         return ORJSONResponse({"status": "Invalid multipart form data."}, status_code=status.HTTP_400_BAD_REQUEST)
 
