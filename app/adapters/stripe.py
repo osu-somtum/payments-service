@@ -18,15 +18,22 @@ async def create_checkout_session(
     cancel_url: str,
 ) -> dict[str, Any]:
     stripe.api_key = settings.STRIPE_SECRET_KEY
+
+    currency = settings.STRIPE_CURRENCY
+    if currency == "usd":
+        charge_amount = int(round(amount_thb * settings.STRIPE_THB_TO_USD_RATE * 100))  # cents
+    else:
+        charge_amount = int(round(amount_thb * 100))  # satang
+
     session = stripe.checkout.Session.create(
         mode="payment",
-        currency="thb",
+        currency=currency,
         line_items=[
             {
                 "quantity": 1,
                 "price_data": {
-                    "currency": "thb",
-                    "unit_amount": int(round(amount_thb * 100)),
+                    "currency": currency,
+                    "unit_amount": charge_amount,
                     "product_data": {
                         "name": "Donator Status",
                         "description": (

@@ -106,6 +106,21 @@ async def stripe_webhook(request: Request) -> ORJSONResponse:
     except stripe_lib.SignatureVerificationError:
         return ORJSONResponse({"status": "invalid signature"}, status_code=status.HTTP_400_BAD_REQUEST)
 
+    if event["type"] == "checkout.session.expired":
+        session_obj = event["data"]["object"]
+        row = await database.fetch_one(
+            "SELECT id FROM donation_transactions WHERE provider = 'stripe' AND provider_reference = :ref AND status = 'pending'",
+            {"ref": session_obj["id"]},
+        )
+        if row:
+            await donations_repo.mark_failed(
+                transaction_id=int(row["id"]),
+                reviewed_by=None,
+                review_note="Stripe checkout session expired.",
+                decision_source="stripe_auto",
+            )
+        return ORJSONResponse({"status": "ok"})
+
     if event["type"] != "checkout.session.completed":
         return ORJSONResponse({"status": "ignored"})
 
