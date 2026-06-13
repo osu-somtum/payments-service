@@ -147,4 +147,4 @@ Key variables:
 
 ## License
 
-MIT
+[MIT](LICENSE) © 2026 Phapoom Saksri
