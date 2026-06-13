@@ -31,7 +31,11 @@ Admin   → GET  /admin/donations
         → POST /admin/donations/{id}/approve
         → POST /admin/donations/{id}/reject
 
+# Somtum / session.py fork:
 payment-service → POST session.{domain}/internal/grant_donator  (bancho.py)
+
+# Vanilla bancho.py (v1/api.py or osu.py):
+payment-service → POST api.{domain}/internal/grant_donator       (bancho.py)
 ```
 
 `grant_donator` is the only call payment-service makes back to bancho.py — to sync in-memory player state (donator bit + `donor_end`). Everything else (DB writes, Stripe calls, Discord webhooks) stays in payment-service.
