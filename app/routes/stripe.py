@@ -63,8 +63,8 @@ async def stripe_checkout(
             donor_user_id=donor_id,
             target_user_id=target_id,
             target_name=str(target_row["name"]),
-            success_url=f"https://{settings.DOMAIN}/donate?stripe=success&session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"https://{settings.DOMAIN}/donate",
+            success_url=f"https://{settings.DOMAIN}/support?stripe=success&session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"https://{settings.DOMAIN}/support",
         )
     except Exception as exc:
         print(f"[stripe] create_checkout_session failed: {exc!r}", flush=True)
