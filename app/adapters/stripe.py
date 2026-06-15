@@ -35,9 +35,9 @@ async def create_checkout_session(
                     "currency": currency,
                     "unit_amount": charge_amount,
                     "product_data": {
-                        "name": "Donator Status",
+                        "name": "Premium Membership",
                         "description": (
-                            f"Donating to {target_name}. "
+                            f"Premium membership for {target_name}. "
                             f"Grants {round(amount_thb * settings.DONATION_DAYS_PER_THB, 2)} days."
                         ),
                     },
