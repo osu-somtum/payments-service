@@ -94,7 +94,7 @@ async def admin_approve_donation(
 async def admin_reject_donation(
     transaction_id: int = Path(..., ge=1),
     session: str | None = Query(default=None),
-    reason: str = Body(...),
+    reason: str = Body(..., embed=True),
 ) -> ORJSONResponse:
     admin, err = await _resolve_admin(session)
     if err is not None:
