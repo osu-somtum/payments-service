@@ -1,10 +1,13 @@
 """Business logic for donation transactions.
 
 grant_donator calls bancho.py's /internal/grant_donator endpoint instead of
-writing to users directly — bancho.py owns in-memory player state.
+writing to users directly — bancho.py owns in-memory player state. With
+PAYMENTS_BACKEND=osu-web it asks osu-web (its InterOp API) to add osu!supporter.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import time
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
@@ -42,10 +45,20 @@ def validate_amount(amount_thb: float | str, *, required_message: str) -> float:
     return float(amount)
 
 
-async def grant_donator(target_user_id: int, days: float) -> int:
-    """Call bancho.py's internal endpoint to extend donor_end and sync in-memory state."""
+async def grant_donator(
+    target_user_id: int,
+    days: float,
+    *,
+    donor_user_id: int | None = None,
+    transaction_id: int | None = None,
+) -> int:
+    """Extend the player's donator/supporter time; returns when it now ends (unix time)."""
     if days <= 0:
         raise DonationError("days must be greater than zero")
+    if settings.IS_OSU_WEB:
+        return await _grant_osu_web_supporter(target_user_id, days, donor_user_id, transaction_id)
+
+    # bancho.py: its internal endpoint extends donor_end and syncs in-memory state.
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(
             f"{settings.BANCHO_INTERNAL_URL}/internal/grant_donator",
@@ -55,6 +68,43 @@ async def grant_donator(target_user_id: int, days: float) -> int:
     if resp.status_code != 200:
         raise DonationError(f"grant_donator failed: {resp.text[:200]}")
     return int(resp.json()["donor_end"])
+
+
+async def osu_web_interop(path: str, body: dict[str, Any]) -> httpx.Response:
+    """POST to osu-web's InterOp API (/_lio/...), signed like its LegacyInterOpAuth expects
+    (HMAC-SHA1 of the full URL, with a timestamp, in X-LIO-Signature)."""
+    url = f"{settings.OSU_WEB_INTERNAL_URL}/_lio/{path}?timestamp={int(time.time())}"
+    signature = hmac.new(settings.OSU_WEB_INTEROP_SECRET.encode(), url.encode(), hashlib.sha1).hexdigest()
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        return await client.post(url, json=body, headers={"X-LIO-Signature": signature, "Accept": "application/json"})
+
+
+async def _grant_osu_web_supporter(
+    target_user_id: int, days: float, donor_user_id: int | None, transaction_id: int | None,
+) -> int:
+    """osu-web: add supporter time directly (POST /_lio/tomyum/grant-supporter)."""
+    resp = await osu_web_interop("tomyum/grant-supporter", {
+        "target_user_id": target_user_id,
+        "days": days,
+        "donor_user_id": donor_user_id,
+        "transaction_id": transaction_id,
+    })
+    if resp.status_code != 200:
+        raise DonationError(f"grant-supporter failed ({resp.status_code}): {resp.text[:200]}")
+    return int(resp.json()["donor_end"])
+
+
+async def mark_store_order_paid(*, order_id: int, provider: str, reference: str, amount_thb: float) -> None:
+    """osu-web: a store order was paid; it fulfils it (POST /_lio/tomyum/store-order-paid).
+    Safe to repeat: an order already paid only answers."""
+    resp = await osu_web_interop("tomyum/store-order-paid", {
+        "order_id": order_id,
+        "provider": provider,
+        "transaction_id": reference,
+        "amount_thb": amount_thb,
+    })
+    if resp.status_code != 200:
+        raise DonationError(f"store-order-paid failed ({resp.status_code}): {resp.text[:200]}")
 
 
 async def approve_transaction(
@@ -76,7 +126,12 @@ async def approve_transaction(
         required_message="Approved amount is required.",
     )
     days = calculate_days(amount)
-    donor_end = await grant_donator(int(transaction["target_user_id"]), days)
+    donor_end = await grant_donator(
+        int(transaction["target_user_id"]),
+        days,
+        donor_user_id=int(transaction["donor_user_id"]),
+        transaction_id=transaction_id,
+    )
 
     await donations_repo.mark_success(
         transaction_id=transaction_id,
@@ -95,6 +150,9 @@ async def approve_transaction(
 
 
 async def _record_success_activity(transaction: dict[str, Any]) -> None:
+    # bancho.py's player_activity feed; osu-web records supporter gifts and purchases itself.
+    if settings.IS_OSU_WEB:
+        return
     donor_id = int(transaction["donor_user_id"])
     target_id = int(transaction["target_user_id"])
     is_self = donor_id == target_id

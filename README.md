@@ -98,6 +98,29 @@ Then set `BANCHO_INTERNAL_URL` to the URL of whichever subdomain that router is 
 
 > **Note:** `donations_uc.grant_donator` must exist in your fork. If it doesn't, implement it — it needs to extend `users.donor_end`, set the DONATOR privilege bit, and sync any online in-memory `Player` object.
 
+## With TomYum and osu-web
+
+Set `PAYMENTS_BACKEND=osu-web` to sell osu!supporter on an [osu-web](https://github.com/ppy/osu-web)
+website (TomYum's fork) instead of bancho.py's donator status:
+
+- **Players** buy on the website (`/home/supporter`): osu-web forwards their requests here with its
+  `SHARED_INTEROP_SECRET` (`X-Internal-Token`) and who's signed in (`X-User-Id`), so this service
+  doesn't need to face the internet, apart from Stripe's webhook.
+- **Granting**: an approved donation calls osu-web's `POST /_lio/tomyum/grant-supporter`, signed as
+  osu-web's InterOp API expects (HMAC-SHA1 of the URL in `X-LIO-Signature`). osu-web records it like
+  the admin panel's supporter grant and returns when supporter now ends; a transaction grants once.
+- **Data**: `donation_transactions` lives in this service's own database
+  (`migrations/001_donation_transactions.sql`); player names are read from osu-web's `phpbb_users`
+  (`OSU_WEB_DB_NAME`), so the database user needs `SELECT` on that table.
+- PromptPay isn't supported in this mode yet (`PROMPTPAY_ENABLED=false`).
+
+Settings: `OSU_WEB_INTERNAL_URL` (e.g. `http://osu-web:8080`), `OSU_WEB_INTEROP_SECRET`, `OSU_WEB_DB_NAME`,
+and `SUPPORT_URL` (where Stripe returns players, e.g. `https://osu.example.com/home/supporter`).
+On osu-web's side: `TOMYUM_PAYMENTS_URL` (e.g. `http://payments:8001`) and
+`TOMYUM_PAYMENTS_DAYS_PER_THB` (the same rate, for the page).
+
+A `Dockerfile` builds the service (`uvicorn` on `APP_PORT`).
+
 ## Setup
 
 ### 1. Install

@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.database import database
+from app.users import USERS_TABLE
 
 
 def _amount(value: Any) -> float | None:
@@ -23,6 +24,7 @@ def _decode_row(row: Any) -> dict[str, Any]:
         "donor_name": row["donor_name"],
         "target_user_id": int(row["target_user_id"]),
         "target_name": row["target_name"],
+        "store_order_id": row["store_order_id"] if "store_order_id" in row.keys() else None,
         "requested_amount_thb": _amount(row["requested_amount_thb"]) or 0.0,
         "approved_amount_thb": _amount(row["approved_amount_thb"]),
         "days_requested": _amount(row["days_requested"]) or 0.0,
@@ -43,15 +45,15 @@ def _decode_row(row: Any) -> dict[str, Any]:
     }
 
 
-_SELECT_JOINED = """
+_SELECT_JOINED = f"""
     SELECT dt.*,
            donor.name  AS donor_name,
            target.name AS target_name,
            reviewer.name AS reviewed_by_name
     FROM donation_transactions dt
-    INNER JOIN users donor  ON donor.id  = dt.donor_user_id
-    INNER JOIN users target ON target.id = dt.target_user_id
-    LEFT  JOIN users reviewer ON reviewer.id = dt.reviewed_by
+    INNER JOIN {USERS_TABLE} donor  ON donor.id  = dt.donor_user_id
+    INNER JOIN {USERS_TABLE} target ON target.id = dt.target_user_id
+    LEFT  JOIN {USERS_TABLE} reviewer ON reviewer.id = dt.reviewed_by
 """
 
 
@@ -68,17 +70,20 @@ async def create(
     provider_reference: str | None = None,
     slip_path: str | None = None,
     slip_token: str | None = None,
+    store_order_id: int | None = None,
 ) -> int:
+    # store_order_id only exists with PAYMENTS_BACKEND=osu-web (migrations/002_store_order_id.sql).
+    order_column, order_value = (", store_order_id", ", :store_order_id") if store_order_id is not None else ("", "")
     return await database.execute(
-        """
+        f"""
         INSERT INTO donation_transactions
             (provider, status, donor_user_id, target_user_id,
              requested_amount_thb, days_requested, anonymous, message,
-             provider_reference, slip_path, slip_token)
+             provider_reference, slip_path, slip_token{order_column})
         VALUES
             (:provider, :status, :donor_user_id, :target_user_id,
              :requested_amount_thb, :days_requested, :anonymous, :message,
-             :provider_reference, :slip_path, :slip_token)
+             :provider_reference, :slip_path, :slip_token{order_value})
         """,
         {
             "provider": provider, "status": status,
@@ -87,6 +92,7 @@ async def create(
             "anonymous": 1 if anonymous else 0, "message": message,
             "provider_reference": provider_reference, "slip_path": slip_path,
             "slip_token": slip_token,
+            **({"store_order_id": store_order_id} if store_order_id is not None else {}),
         },
     )
 

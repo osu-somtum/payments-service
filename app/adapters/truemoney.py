@@ -73,3 +73,53 @@ async def redeem_voucher(phone_number: str, voucher_code: str) -> dict[str, Any]
 
     reason = status_block.get("message") or f"TrueMoney rejected voucher (code={code_str})."
     return {"status": "FAIL", "reason": reason}
+
+
+_VERIFY_URL: Final[str] = "https://gift.truemoney.com/campaign/vouchers/{voucher}/verify"
+
+
+def _amount_from(data: dict[str, Any]) -> float | None:
+    voucher = data.get("voucher") or {}
+    for key in ("amount_baht", "redeemed_amount_baht"):
+        try:
+            return float(voucher[key])
+        except (KeyError, TypeError, ValueError):
+            continue
+    return None
+
+
+async def verify_voucher(phone_number: str, voucher_code: str) -> dict[str, Any]:
+    """What a voucher is worth, without redeeming it: {"status": "SUCCESS", "amount": baht}, or
+    FAIL (the voucher can't be used) / ERROR (TrueMoney couldn't be asked) with a reason."""
+    code = _normalize_voucher(voucher_code)
+    if not code:
+        return {"status": "FAIL", "reason": "Voucher code cannot be empty."}
+    if not _VOUCHER_RE.match(code):
+        return {"status": "FAIL", "reason": "Voucher only allows English alphabets or numbers."}
+    if not phone_number:
+        return {"status": "ERROR", "reason": "Merchant phone number is not configured."}
+
+    try:
+        async with httpx.AsyncClient(verify=_tls_context(), timeout=_REQUEST_TIMEOUT) as client:
+            response = await client.get(
+                _VERIFY_URL.format(voucher=code),
+                params={"mobile": phone_number},
+                headers={k: v for k, v in _BROWSER_HEADERS.items() if k != "Content-Type"},
+            )
+    except httpx.HTTPError as exc:
+        return {"status": "ERROR", "reason": f"network error: {exc}"}
+
+    try:
+        body = response.json()
+    except ValueError:
+        return {"status": "ERROR", "reason": f"non-JSON response (HTTP {response.status_code})"}
+
+    status_block = body.get("status") or {}
+    if status_block.get("code") == "SUCCESS":
+        amount = _amount_from(body.get("data") or {})
+        if amount is None:
+            return {"status": "ERROR", "reason": "Unexpected SUCCESS payload from TrueMoney."}
+        return {"status": "SUCCESS", "amount": amount}
+
+    reason = status_block.get("message") or f"TrueMoney rejected voucher (code={status_block.get('code')})."
+    return {"status": "FAIL", "reason": reason}

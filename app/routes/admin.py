@@ -4,8 +4,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, Path, Query
 from fastapi.responses import ORJSONResponse
 from starlette import status
+from starlette.requests import Request
 
-from app.auth import resolve_session_user
+from app import settings, users
+from app.auth import osu_web_admin, request_user, resolve_session_user
 from app.database import database
 from app.repositories import donations as donations_repo
 from app.usecases import donations as donations_uc
@@ -17,8 +19,18 @@ _DONATION_STATUSES = {"pending", "success", "failed"}
 _DONATION_PROVIDERS = {"truemoney", "promptpay", "stripe"}
 
 
-async def _resolve_admin(session_token: str | None) -> tuple[dict, ORJSONResponse | None]:
+async def _resolve_admin(request: Request, session_token: str | None) -> tuple[dict, ORJSONResponse | None]:
     """Return (admin_row, None) or (None, error_response)."""
+    if settings.IS_OSU_WEB:
+        # osu-web forwards staff requests and says who may review donations.
+        user_id = await request_user(request)
+        admin = await users.fetch(user_id) if user_id is not None else None
+        if admin is None:
+            return {}, ORJSONResponse({"status": "Unauthorized"}, status_code=status.HTTP_401_UNAUTHORIZED)
+        if not osu_web_admin(request):
+            return {}, ORJSONResponse({"status": "Forbidden"}, status_code=status.HTTP_403_FORBIDDEN)
+        return admin, None
+
     user_id = await resolve_session_user(session_token)
     if user_id is None:
         return {}, ORJSONResponse({"status": "Unauthorized"}, status_code=status.HTTP_401_UNAUTHORIZED)
@@ -36,13 +48,14 @@ async def _resolve_admin(session_token: str | None) -> tuple[dict, ORJSONRespons
 
 @router.get("/admin/donations")
 async def admin_donations(
+    request: Request,
     session: str | None = Query(default=None),
     donation_status: str | None = Query(default=None, alias="status"),
     provider: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> ORJSONResponse:
-    _admin, err = await _resolve_admin(session)
+    _admin, err = await _resolve_admin(request, session)
     if err is not None:
         return err
     if donation_status is not None and donation_status not in _DONATION_STATUSES:
@@ -59,12 +72,13 @@ async def admin_donations(
 
 @router.post("/admin/donations/{transaction_id}/approve")
 async def admin_approve_donation(
+    request: Request,
     transaction_id: int = Path(..., ge=1),
     session: str | None = Query(default=None),
     actual_amount_thb: float | None = Body(default=None, ge=0),
     note: str | None = Body(default=None),
 ) -> ORJSONResponse:
-    admin, err = await _resolve_admin(session)
+    admin, err = await _resolve_admin(request, session)
     if err is not None:
         return err
     if note is not None and len(note) > 500:
@@ -78,11 +92,12 @@ async def admin_approve_donation(
     except donations_uc.DonationError as exc:
         return ORJSONResponse({"status": str(exc)}, status_code=status.HTTP_400_BAD_REQUEST)
 
-    await database.execute(
-        "INSERT INTO logs (`from`, `to`, `action`, `msg`, `time`) VALUES (:f, :t, :a, :m, NOW())",
-        {"f": admin["id"], "t": transaction["target_user_id"], "a": "donation_approve",
-         "m": f"Approved donation #{transaction_id} for {transaction['approved_amount_thb']} THB. Note: {note or 'none'}"},
-    )
+    if not settings.IS_OSU_WEB:  # bancho.py's staff log
+        await database.execute(
+            "INSERT INTO logs (`from`, `to`, `action`, `msg`, `time`) VALUES (:f, :t, :a, :m, NOW())",
+            {"f": admin["id"], "t": transaction["target_user_id"], "a": "donation_approve",
+             "m": f"Approved donation #{transaction_id} for {transaction['approved_amount_thb']} THB. Note: {note or 'none'}"},
+        )
     try:
         await notify_review(transaction, action="approved", actor_name=admin.get("name"))
     except Exception:
@@ -92,11 +107,12 @@ async def admin_approve_donation(
 
 @router.post("/admin/donations/{transaction_id}/reject")
 async def admin_reject_donation(
+    request: Request,
     transaction_id: int = Path(..., ge=1),
     session: str | None = Query(default=None),
     reason: str = Body(..., embed=True),
 ) -> ORJSONResponse:
-    admin, err = await _resolve_admin(session)
+    admin, err = await _resolve_admin(request, session)
     if err is not None:
         return err
     reason = reason.strip()
@@ -110,11 +126,12 @@ async def admin_reject_donation(
     except donations_uc.DonationError as exc:
         return ORJSONResponse({"status": str(exc)}, status_code=status.HTTP_400_BAD_REQUEST)
 
-    await database.execute(
-        "INSERT INTO logs (`from`, `to`, `action`, `msg`, `time`) VALUES (:f, :t, :a, :m, NOW())",
-        {"f": admin["id"], "t": transaction["target_user_id"], "a": "donation_reject",
-         "m": f"Rejected donation #{transaction_id}. Reason: {reason}"},
-    )
+    if not settings.IS_OSU_WEB:  # bancho.py's staff log
+        await database.execute(
+            "INSERT INTO logs (`from`, `to`, `action`, `msg`, `time`) VALUES (:f, :t, :a, :m, NOW())",
+            {"f": admin["id"], "t": transaction["target_user_id"], "a": "donation_reject",
+             "m": f"Rejected donation #{transaction_id}. Reason: {reason}"},
+        )
     try:
         await notify_review(transaction, action="rejected", actor_name=admin.get("name"))
     except Exception:

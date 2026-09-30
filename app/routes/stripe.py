@@ -6,18 +6,15 @@ from fastapi import APIRouter, Body, Request
 from fastapi.responses import ORJSONResponse
 from starlette import status
 
-from app import settings
+from app import settings, users
 from app.adapters import stripe as stripe_adapter
-from app.auth import resolve_session_user
+from app.auth import request_user
 from app.database import database
 from app.repositories import donations as donations_repo
 from app.usecases import donations as donations_uc
 from app.webhooks import format_transaction
 
 router = APIRouter()
-
-_DOMAIN = f"https://payment.{settings.DOMAIN}"
-
 
 @router.post("/donate/stripe/checkout")
 async def stripe_checkout(
@@ -33,14 +30,7 @@ async def stripe_checkout(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
-    session_token = request.cookies.get("session")
-    if not session_token:
-        auth = request.headers.get("authorization", "")
-        scheme, _, value = auth.partition(" ")
-        if scheme.lower() == "bearer" and value:
-            session_token = value.strip()
-
-    donor_id = await resolve_session_user(session_token)
+    donor_id = await request_user(request)
     if donor_id is None:
         return ORJSONResponse({"status": "Unauthorized"}, status_code=status.HTTP_401_UNAUTHORIZED)
 
@@ -53,7 +43,7 @@ async def stripe_checkout(
         return ORJSONResponse({"status": "Message must be at most 280 characters."}, status_code=status.HTTP_400_BAD_REQUEST)
 
     target_id = donor_id if target_user_id is None else int(target_user_id)
-    target_row = await database.fetch_one("SELECT id, name FROM users WHERE id = :id", {"id": target_id})
+    target_row = await users.fetch(target_id)
     if target_row is None:
         return ORJSONResponse({"status": "Target user not found."}, status_code=status.HTTP_404_NOT_FOUND)
 
@@ -63,8 +53,8 @@ async def stripe_checkout(
             donor_user_id=donor_id,
             target_user_id=target_id,
             target_name=str(target_row["name"]),
-            success_url=f"https://{settings.DOMAIN}/support?stripe=success&session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"https://{settings.DOMAIN}/support",
+            success_url=f"{settings.SUPPORT_URL}{'&' if '?' in settings.SUPPORT_URL else '?'}stripe=success&session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=settings.SUPPORT_URL,
         )
     except Exception as exc:
         print(f"[stripe] create_checkout_session failed: {exc!r}", flush=True)
@@ -134,11 +124,35 @@ async def stripe_webhook(request: Request) -> ORJSONResponse:
         {"ref": stripe_session_id},
     )
     if row is None:
-        # Not found — idempotent, Stripe may retry
+        # Already handled (Stripe delivers events more than once): answer 2xx, or it keeps retrying.
+        handled = await database.fetch_one(
+            "SELECT id FROM donation_transactions WHERE provider = 'stripe' AND provider_reference = :ref",
+            {"ref": stripe_session_id},
+        )
+        if handled is not None:
+            return ORJSONResponse({"status": "already_processed"})
         return ORJSONResponse({"status": "not_found"}, status_code=status.HTTP_404_NOT_FOUND)
 
     transaction_id = int(row["id"])
     amount_thb = float(metadata.get("amount_thb") or session_obj.get("amount_total", 0) / 100)
+
+    # osu-web store order: osu-web fulfils it. Marked done only once osu-web has it, so a failure
+    # answers 500 and Stripe's retry completes the order later.
+    if metadata.get("store_order_id"):
+        order_id = int(metadata["store_order_id"])
+        try:
+            await donations_uc.mark_store_order_paid(
+                order_id=order_id, provider="stripe", reference=stripe_session_id, amount_thb=amount_thb,
+            )
+        except Exception as exc:
+            print(f"[webhook] store order {order_id} not completed yet (tx {transaction_id}): {exc!r}", flush=True)
+            return ORJSONResponse({"status": "retry"}, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        await donations_repo.mark_success(
+            transaction_id=transaction_id, approved_amount_thb=amount_thb, days_granted=0, donor_end=0,
+            reviewed_by=None, review_note=f"Store order #{order_id}.", decision_source="stripe_auto",
+        )
+        return ORJSONResponse({"status": "ok"})
+
     print(f"[webhook] approving transaction_id={transaction_id} amount_thb={amount_thb}", flush=True)
 
     try:
